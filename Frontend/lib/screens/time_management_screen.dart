@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import '../layouts/admin_layout.dart';
 
 // ── Data model ─────────────────────────────────────────────────────────────────
@@ -27,15 +29,15 @@ class TimeManagerScreen extends StatefulWidget {
 }
 
 class _TimeManagerScreenState extends State<TimeManagerScreen> {
-  int _nextId = 5;
 
-  // Pre-populated task entries (the table rows)
-  final List<_TaskEntry> _entries = [
-    _TaskEntry(id: 1, taskName: 'Poster',     qty: '1', timing: '30 mins'),
-    _TaskEntry(id: 2, taskName: 'Video',      qty: '1', timing: '3 hrs'),
-    _TaskEntry(id: 3, taskName: 'Meta Ads',    qty: '2', timing: '1 days'),
-    _TaskEntry(id: 4, taskName: 'Google Ads',  qty: '1', timing: '1 days'),
-  ];
+  // ── API base URL ──────────────────────────────────────────────────────────────
+  static const String _baseUrl = 'http://localhost:3000/api';
+
+  bool _loading = true;
+  String? _loadError;
+
+  // Task entries (the table rows) — now loaded from backend
+  List<_TaskEntry> _entries = [];
 
   // Dropdown task name options
   final List<String> _taskOptions = [
@@ -55,11 +57,18 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
 
   // Form state fields tracking variables
   String? _selectedTaskName;
-  final TextEditingController _otherTaskCtrl = TextEditingController(); 
+  final TextEditingController _otherTaskCtrl = TextEditingController();
   final TextEditingController _qtyCtrl     = TextEditingController();
-  final TextEditingController _timingValCtrl = TextEditingController(); 
-  String _selectedTimingUnit = 'mins'; 
-  int? _editingId; 
+  final TextEditingController _timingValCtrl = TextEditingController();
+  String _selectedTimingUnit = 'mins';
+  int? _editingId;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchEntries();
+  }
 
   @override
   void dispose() {
@@ -67,6 +76,92 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
     _qtyCtrl.dispose();
     _timingValCtrl.dispose();
     super.dispose();
+  }
+
+  // ── API: FETCH all entries ───────────────────────────────────────────────────
+  Future<void> _fetchEntries() async {
+    setState(() { _loading = true; _loadError = null; });
+    try {
+      final response = await http.get(Uri.parse('$_baseUrl/timings'));
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        final List data = body['data'];
+        setState(() {
+          _entries = data.map((e) => _TaskEntry(
+            id:       e['id'],
+            taskName: e['task_name'],
+            qty:      e['qty'].toString(),
+            timing:   e['timing'],
+          )).toList();
+          _loading = false;
+        });
+      } else {
+        setState(() { _loadError = 'Server returned ${response.statusCode}'; _loading = false; });
+      }
+    } catch (e) {
+      setState(() { _loadError = 'Cannot connect to server'; _loading = false; });
+    }
+  }
+
+  // ── API: CREATE entry ─────────────────────────────────────────────────────────
+  Future<void> _createEntry(String taskName, String qty, String timing) async {
+    try {
+      final response = await http.post(
+        Uri.parse('$_baseUrl/timings'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'taskName': taskName, 'qty': qty, 'timing': timing}),
+      );
+      if (response.statusCode == 201) {
+        await _fetchEntries();
+      } else {
+        final body = jsonDecode(response.body);
+        _showSnack(body['message'] ?? 'Failed to create entry');
+      }
+    } catch (e) {
+      _showSnack('Cannot connect to server');
+    }
+  }
+
+  // ── API: UPDATE entry ─────────────────────────────────────────────────────────
+  Future<void> _updateEntry(int id, String taskName, String qty, String timing) async {
+    try {
+      final response = await http.put(
+        Uri.parse('$_baseUrl/timings/$id'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'taskName': taskName, 'qty': qty, 'timing': timing}),
+      );
+      if (response.statusCode == 200) {
+        await _fetchEntries();
+      } else {
+        final body = jsonDecode(response.body);
+        _showSnack(body['message'] ?? 'Failed to update entry');
+      }
+    } catch (e) {
+      _showSnack('Cannot connect to server');
+    }
+  }
+
+  // ── API: DELETE entry ─────────────────────────────────────────────────────────
+  Future<void> _deleteEntryApi(int id) async {
+    try {
+      final response = await http.delete(Uri.parse('$_baseUrl/timings/$id'));
+      if (response.statusCode == 200) {
+        await _fetchEntries();
+        _showSnack('Entry deleted', success: true);
+      } else {
+        _showSnack('Failed to delete entry');
+      }
+    } catch (e) {
+      _showSnack('Cannot connect to server');
+    }
+  }
+
+  void _showSnack(String msg, {bool success = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: success ? const Color(0xFF16A34A) : Colors.redAccent,
+    ));
   }
 
   // ── Form helpers ──────────────────────────────────────────────────────────────
@@ -106,15 +201,15 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
     });
   }
 
-  void _saveForm() {
+  Future<void> _saveForm() async {
     String task = _selectedTaskName ?? '';
     if (task == 'Other') {
       task = _otherTaskCtrl.text.trim();
     }
-    
+
     final qty    = _qtyCtrl.text.trim();
     final timingVal = _timingValCtrl.text.trim();
-    final timingMerged = "$timingVal $_selectedTimingUnit"; 
+    final timingMerged = "$timingVal $_selectedTimingUnit";
 
     if (task.isEmpty || qty.isEmpty || timingVal.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -123,24 +218,23 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
       return;
     }
 
-    setState(() {
-      if (_editingId != null) {
-        final idx = _entries.indexWhere((e) => e.id == _editingId);
-        if (idx != -1) {
-          _entries[idx] = _TaskEntry(id: _editingId!, taskName: task, qty: qty, timing: timingMerged);
-        }
-      } else {
-        _entries.add(_TaskEntry(id: _nextId++, taskName: task, qty: qty, timing: timingMerged));
-      }
-      _clearForm();
-    });
+    setState(() => _saving = true);
+
+    if (_editingId != null) {
+      // ── UPDATE existing entry via API ───────────────────────────────────────
+      await _updateEntry(_editingId!, task, qty, timingMerged);
+    } else {
+      // ── CREATE new entry via API ────────────────────────────────────────────
+      await _createEntry(task, qty, timingMerged);
+    }
+
+    setState(() => _saving = false);
+    _clearForm();
   }
 
   void _deleteEntry(int id) {
-    setState(() {
-      _entries.removeWhere((e) => e.id == id);
-      if (_editingId == id) _clearForm();
-    });
+    if (_editingId == id) _clearForm();
+    _deleteEntryApi(id); // ← API DELETE call
   }
 
   @override
@@ -175,21 +269,6 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
                   ],
                 ),
               ),
-              // const SizedBox(width: 16),
-              // ElevatedButton.icon(
-              //   onPressed: _clearForm,
-              //   icon: const Icon(Icons.add, size: 16, color: Colors.white),
-              //   label: const Text(
-              //     'Add Time Setter',
-              //     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
-              //   ),
-              //   style: ElevatedButton.styleFrom(
-              //     backgroundColor: const Color(0xFF1A3A8F),
-              //     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(6)),
-              //     padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 12),
-              //     elevation: 0,
-              //   ),
-              // ),
             ],
           ),
 
@@ -243,9 +322,19 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
               color: const Color(0xFFF1F5F9),
-              child: const Text(
-                'Task Log',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF1E293B)),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  const Text(
+                    'Task Log',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Color(0xFF1E293B)),
+                  ),
+                  // Refresh button
+                  GestureDetector(
+                    onTap: _fetchEntries,
+                    child: const Icon(Icons.refresh_rounded, size: 18, color: Color(0xFF1A3A8F)),
+                  ),
+                ],
               ),
             ),
           ),
@@ -264,81 +353,102 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
             ),
           ),
 
-          _entries.isEmpty
-              ? const Padding(
-                  padding: EdgeInsets.all(24),
-                  child: Center(
-                    child: Text('No tasks yet. Use the form to add one.',
-                        style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator(color: Color(0xFF1A3A8F))),
+            )
+          else if (_loadError != null)
+            Padding(
+              padding: const EdgeInsets.all(24),
+              child: Center(
+                child: Column(children: [
+                  Text(_loadError!, style: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+                  const SizedBox(height: 10),
+                  ElevatedButton(
+                    onPressed: _fetchEntries,
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF1A3A8F)),
+                    child: const Text('Retry', style: TextStyle(color: Colors.white)),
                   ),
-                )
-              : Column(
-                  children: _entries.asMap().entries.map((e) {
-                    final idx   = e.key;
-                    final entry = e.value;
-                    final isEditing = _editingId == entry.id;
-                    return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-                      decoration: BoxDecoration(
-                        color: isEditing ? const Color(0xFFF0F4FF) : Colors.white,
-                        border: const Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
+                ]),
+              ),
+            )
+          else if (_entries.isEmpty)
+            const Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(
+                child: Text('No tasks yet. Use the form to add one.',
+                    style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
+              ),
+            )
+          else
+            Column(
+              children: _entries.asMap().entries.map((e) {
+                final idx   = e.key;
+                final entry = e.value;
+                final isEditing = _editingId == entry.id;
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                  decoration: BoxDecoration(
+                    color: isEditing ? const Color(0xFFF0F4FF) : Colors.white,
+                    border: const Border(bottom: BorderSide(color: Color(0xFFF3F4F6))),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        flex: 1,
+                        child: Text('${idx + 1}', style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
                       ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            flex: 1,
-                            child: Text('${idx + 1}', style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280))),
-                          ),
-                          Expanded(
-                            flex: 3,
+                      Expanded(
+                        flex: 3,
+                        child: Text(
+                          entry.taskName,
+                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF1A1A2E)),
+                        ),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Text(entry.qty, style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
+                      ),
+                      Expanded(
+                        flex: 2,
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(4)),
                             child: Text(
-                              entry.taskName,
-                              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500, color: Color(0xFF1A1A2E)),
+                              entry.timing,
+                              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1D4ED8)),
                             ),
                           ),
-                          Expanded(
-                            flex: 2,
-                            child: Text(entry.qty, style: const TextStyle(fontSize: 13, color: Color(0xFF374151))),
-                          ),
-                          Expanded(
-                            flex: 2,
-                            child: Align(
-                              alignment: Alignment.centerLeft,
-                              child: Container(
-                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                decoration: BoxDecoration(color: const Color(0xFFEFF6FF), borderRadius: BorderRadius.circular(4)),
-                                child: Text(
-                                  entry.timing,
-                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Color(0xFF1D4ED8)),
-                                ),
-                              ),
-                            ),
-                          ),
-                          Expanded(
-                            flex: 2,
-                            child: Row(
-                              children: [
-                                _ActionBtn(
-                                  icon: Icons.edit_outlined,
-                                  color: const Color(0xFF2A52BE),
-                                  bg: const Color(0xFFEFF6FF),
-                                  onTap: () => _populateForm(entry),
-                                ),
-                                const SizedBox(width: 8),
-                                _ActionBtn(
-                                  icon: Icons.delete_outline,
-                                  color: const Color(0xFFDC2626),
-                                  bg: const Color(0xFFFEE2E2),
-                                  onTap: () => _deleteEntry(entry.id),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
+                        ),
                       ),
-                    );
-                  }).toList(),
-                ),
+                      Expanded(
+                        flex: 2,
+                        child: Row(
+                          children: [
+                            _ActionBtn(
+                              icon: Icons.edit_outlined,
+                              color: const Color(0xFF2A52BE),
+                              bg: const Color(0xFFEFF6FF),
+                              onTap: () => _populateForm(entry),
+                            ),
+                            const SizedBox(width: 8),
+                            _ActionBtn(
+                              icon: Icons.delete_outline,
+                              color: const Color(0xFFDC2626),
+                              bg: const Color(0xFFFEE2E2),
+                              onTap: () => _deleteEntry(entry.id),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
         ],
       ),
     );
@@ -402,10 +512,25 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
                       value: _selectedTaskName,
                       isExpanded: true,
                       hint: const Text('Select task', style: TextStyle(fontSize: 13, color: Color(0xFF9CA3AF))),
-                      items: _taskOptions.map((t) => DropdownMenuItem(
-                        value: t,
-                        child: Text(t, style: const TextStyle(fontSize: 13, color: Color(0xFF1A1A2E))),
-                      )).toList(),
+                      items: _taskOptions.map((t) {
+                        // ── A task name is "used" if it already exists in another row ──
+                        // "Other" is always selectable; the row currently being edited
+                        // keeps its own task name selectable too.
+                        final isUsed = t != 'Other' &&
+                            _entries.any((e) => e.taskName == t && e.id != _editingId);
+
+                        return DropdownMenuItem(
+                          value: t,
+                          enabled: !isUsed, // ✅ shown, but cannot be picked if already added
+                          child: Text(
+                            isUsed ? '$t (already added)' : t,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: isUsed ? const Color(0xFFB0B7C3) : const Color(0xFF1A1A2E),
+                            ),
+                          ),
+                        );
+                      }).toList(),
                       onChanged: (val) => setState(() => _selectedTaskName = val),
                       icon: const Icon(Icons.keyboard_arrow_down_rounded, color: Color(0xFF6B7280)),
                     ),
@@ -437,7 +562,7 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
                       ),
                     ),
                     const SizedBox(width: 14),
-                    
+
                     // ── TWO-SEGMENT TIMING FIELD MATRIX ──
                     Expanded(
                       flex: 3,
@@ -463,11 +588,11 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
                                       filled: true,
                                       fillColor: const Color(0xFFF9FAFB),
                                       enabledBorder: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(6), 
+                                        borderRadius: BorderRadius.circular(6),
                                         borderSide: const BorderSide(color: Color(0xFFD1D5DB), width: 1)
                                       ),
                                       focusedBorder: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(6), 
+                                        borderRadius: BorderRadius.circular(6),
                                         borderSide: const BorderSide(color: Color(0xFF1A3A8F), width: 1.5)
                                       ),
                                     ),
@@ -514,7 +639,7 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: _clearForm,
+                        onPressed: _saving ? null : _clearForm,
                         style: OutlinedButton.styleFrom(
                           foregroundColor: const Color(0xFF374151),
                           side: const BorderSide(color: Color(0xFFD1D5DB)),
@@ -527,7 +652,7 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
                     const SizedBox(width: 12),
                     Expanded(
                       child: ElevatedButton(
-                        onPressed: _saveForm,
+                        onPressed: _saving ? null : _saveForm,
                         style: ElevatedButton.styleFrom(
                           backgroundColor: const Color(0xFF1A3A8F),
                           foregroundColor: Colors.white,
@@ -535,10 +660,15 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
                           padding: const EdgeInsets.symmetric(vertical: 12),
                           elevation: 0,
                         ),
-                        child: Text(
-                          isEditing ? 'Update' : 'Create',
-                          style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                        ),
+                        child: _saving
+                            ? const SizedBox(
+                                width: 16, height: 16,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : Text(
+                                isEditing ? 'Update' : 'Create',
+                                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                              ),
                       ),
                     ),
                   ],
@@ -563,24 +693,24 @@ class _TimeManagerScreenState extends State<TimeManagerScreen> {
         Text(label, style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500, color: Color(0xFF374151))),
         const SizedBox(height: 6),
         SizedBox(
-          height: 38, 
+          height: 38,
           child: TextField(
             controller: controller,
             keyboardType: keyboardType,
             style: const TextStyle(fontSize: 13, color: Color(0xFF1A1A2E)),
             decoration: InputDecoration(
-              hintText: hint, 
+              hintText: hint,
               hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF), fontWeight: FontWeight.w400),
-              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10), 
+              contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
               filled: true,
               fillColor: const Color(0xFFF9FAFB),
               enabledBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFFD1D5DB), width: 1), 
+                borderSide: const BorderSide(color: Color(0xFFD1D5DB), width: 1),
               ),
               focusedBorder: OutlineInputBorder(
                 borderRadius: BorderRadius.circular(6),
-                borderSide: const BorderSide(color: Color(0xFF1A3A8F), width: 1.5), 
+                borderSide: const BorderSide(color: Color(0xFF1A3A8F), width: 1.5),
               ),
             ),
           ),

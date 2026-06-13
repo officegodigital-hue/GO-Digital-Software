@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'screens/login_screen.dart';
 import 'screens/admin_dashboard.dart';
 import 'screens/employee_dashboard.dart';
+import 'screens/client_history_screen.dart';
 import 'screens/client_onboarding_screen.dart';
 import 'screens/Package_Quotation_admin.dart';
 import 'screens/create_quotation_screen.dart';
@@ -35,6 +36,7 @@ class MyApp extends StatelessWidget {
         '/admin': (context) => const AdminDashboard(),
         '/employee': (context) => const EmployeeDashboard(),
         '/client': (context) => const ClientOnboardingScreen(),
+        '/client-history': (context) => const ClientHistoryScreen(),
         '/quotation': (context) => const PackageQuotationAdmin(),
         '/create-quotation': (context) => const CreateQuotationScreen(),
         '/invoice': (context) => const InvoiceAdminScreen(),

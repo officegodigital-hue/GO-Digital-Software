@@ -61,7 +61,7 @@ class AdminLayout extends StatelessWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         _navItem(Icons.dashboard_rounded,             'Dashboard',           '/admin',           context),
-                        _navItem(Icons.person_add_alt_1_rounded,      'Client Onboarding',   '/client',          context),
+                        _navItem(Icons.person_add_alt_1_rounded,      'Client Onboarding',   '/client-history',  context),
                         _navItem(Icons.inventory_2_outlined,          'Package & Quotation', '/quotation',       context),
                         _navItem(Icons.receipt_long_outlined,         'Invoice',             '/invoice',         context),
                         _navItem(Icons.assignment_outlined,           'Tasks Assign',        '/tasks',           context),
